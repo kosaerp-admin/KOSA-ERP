@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>업무 · 주간 달력</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;margin:0;background:#f6f7fb;}
+    header{background:#111827;color:#fff;padding:16px 20px;}
+    main{max-width:1100px;margin:18px auto;padding:0 16px;}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .card{background:#fff;border-radius:14px;box-shadow:0 6px 18px rgba(0,0,0,.06);padding:14px}
+    .btn{border:0;border-radius:10px;padding:10px 12px;font-weight:700;cursor:pointer}
+    .primary{background:#111827;color:#fff}
+    select,input{padding:8px;border-radius:8px;border:1px solid #e5e7eb}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:10px;border-bottom:1px solid #eef0f4;text-align:left}
+    th{font-size:12px;color:#6b7280}
+  </style>
+</head>
+<body>
+<header>
+  <div style="font-weight:800">업무 · 주간 달력</div>
+</header>
+<main>
+  <div class="row">
+    <div class="card" style="flex:1">
+      <h3>업무 생성</h3>
+      <div class="row">
+        <input id="title" placeholder="업무 제목" />
+        <input id="start" type="datetime-local" />
+        <input id="end" type="datetime-local" />
+        <select id="campus"></select>
+        <button class="btn primary" id="add">추가</button>
+      </div>
+    </div>
+    <div class="card" style="flex:2">
+      <h3>이번 주 업무</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>캠퍼스</th><th>제목</th><th>기간</th><th>상태</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+  const SUPABASE_URL = "YOUR_URL";
+  const SUPABASE_ANON_KEY = "YOUR_KEY";
+  const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const $ = id => document.getElementById(id);
+
+  async function loadCampuses(){
+    const { data } = await supabase.from("campuses").select("campus_id,campus_name");
+    $("campus").innerHTML = data.map(c=>`<option value="${c.campus_id}">${c.campus_name}</option>`).join("");
+  }
+
+  async function loadTasks(){
+    const { data } = await supabase.from("tasks")
+      .select("title,start_at,end_at,status,campuses(campus_name)")
+      .order("start_at",{ascending:true});
+    $("tbody").innerHTML = (data||[]).map(t=>`
+      <tr>
+        <td>${t.campuses?.campus_name||""}</td>
+        <td>${t.title}</td>
+        <td>${new Date(t.start_at).toLocaleString()} ~ ${new Date(t.end_at).toLocaleString()}</td>
+        <td>${t.status}</td>
+      </tr>`).join("");
+  }
+
+  $("add").onclick = async ()=>{
+    await supabase.from("tasks").insert([{
+      title: $("title").value,
+      campus_id: $("campus").value,
+      start_at: $("start").value,
+      end_at: $("end").value,
+      status: "IN_PROGRESS",
+      created_by: (await supabase.auth.getUser()).data.user.id
+    }]);
+    loadTasks();
+  };
+
+  await loadCampuses();
+  await loadTasks();
+</script>
+</body>
+</html>

@@ -62,15 +62,23 @@
 
   async function loadTasks(){
     const { data } = await supabase.from("tasks")
-      .select("title,start_at,end_at,status,campuses(campus_name)")
+      .select("task_id,title,start_at,end_at,status,campuses(campus_name)")
       .order("start_at",{ascending:true});
-    $("tbody").innerHTML = (data||[]).map(t=>`
-      <tr>
-        <td>${t.campuses?.campus_name||""}</td>
-        <td>${t.title}</td>
-        <td>${new Date(t.start_at).toLocaleString()} ~ ${new Date(t.end_at).toLocaleString()}</td>
-        <td>${t.status}</td>
-      </tr>`).join("");
+$("tbody").innerHTML = (data||[]).map(t=>`
+  <tr>
+    <td>${t.campuses?.campus_name||""}</td>
+    <td>${t.title}</td>
+    <td>${new Date(t.start_at).toLocaleString()} ~ ${new Date(t.end_at).toLocaleString()}</td>
+    <td>${t.status}</td>
+    <td>
+      <button data-act="REQUESTED" data-id="${t.task_id}">요청</button>
+      <button data-act="APPROVED" data-id="${t.task_id}">승인</button>
+      <button data-act="COMPLETED" data-id="${t.task_id}">완료</button>
+      <button data-act="REJECT" data-id="${t.task_id}">반려</button>
+    </td>
+  </tr>
+`).join("");
+
   }
 
   $("add").onclick = async ()=>{
@@ -84,6 +92,50 @@
     }]);
     loadTasks();
   };
+  async function logAction(task_id, action, note=null){
+  const u = (await supabase.auth.getUser()).data.user;
+  await supabase.from("task_logs").insert([{
+    task_id,
+    action,
+    note,
+    actor_id: u?.id ?? null
+  }]);
+}
+
+async function changeStatus(task_id, nextStatus){
+  // 반려는 status를 IN_PROGRESS로 되돌리고, 사유는 로그에만
+  if(nextStatus === "REJECT"){
+    const reason = prompt("반려 사유를 입력하세요(로그에만 저장됩니다):") || "";
+    const { error } = await supabase.from("tasks")
+      .update({ status: "IN_PROGRESS", approved_by: null })
+      .eq("task_id", task_id);
+    if(error){ alert(error.message); return; }
+    await logAction(task_id, "REJECT", reason);
+    await loadTasks();
+    return;
+  }
+
+  // 승인/완료는 approved_by 기록(관리자/매니저가 하도록 UI로만 유도, DB는 RLS로 통제 가능)
+  const u = (await supabase.auth.getUser()).data.user;
+
+  const patch = { status: nextStatus };
+  if(nextStatus === "APPROVED") patch.approved_by = u?.id ?? null;
+
+  const { error } = await supabase.from("tasks")
+    .update(patch)
+    .eq("task_id", task_id);
+
+  if(error){ alert(error.message); return; }
+  await logAction(task_id, nextStatus, null);
+  await loadTasks();
+}
+
+  document.querySelectorAll("button[data-act]").forEach(btn=>{
+  btn.onclick = () => changeStatus(btn.dataset.id, btn.dataset.act);
+});
+
+
+  
 
   await loadCampuses();
   await loadTasks();

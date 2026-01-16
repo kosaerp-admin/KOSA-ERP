@@ -14,8 +14,9 @@
     .primary{background:#111827;color:#fff}
     select,input{padding:8px;border-radius:8px;border:1px solid #e5e7eb}
     table{width:100%;border-collapse:collapse}
-    th,td{padding:10px;border-bottom:1px solid #eef0f4;text-align:left}
+    th,td{padding:10px;border-bottom:1px solid #eef0f4;text-align:left;vertical-align:top}
     th{font-size:12px;color:#6b7280}
+    td button{margin-right:6px;margin-bottom:6px;padding:6px 8px;border-radius:8px;border:1px solid #e5e7eb;background:#fff;cursor:pointer}
   </style>
 </head>
 <body>
@@ -34,12 +35,13 @@
         <button class="btn primary" id="add">추가</button>
       </div>
     </div>
+
     <div class="card" style="flex:2">
       <h3>이번 주 업무</h3>
       <table>
         <thead>
           <tr>
-            <th>캠퍼스</th><th>제목</th><th>기간</th><th>상태</th>
+            <th>캠퍼스</th><th>제목</th><th>기간</th><th>상태</th><th>액션</th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -50,92 +52,114 @@
 
 <script type="module">
   import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+
   const SUPABASE_URL = "https://lngyplulwjhehvhldbsu.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_5y6dUg7mtjmH4UQQ0x0MBg_yC5MYryb";
+
   const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
   const $ = id => document.getElementById(id);
 
+  // ✅ (1) logAction / changeStatus 는 loadTasks 보다 위에 둔다
+  async function logAction(task_id, action, note=null){
+    const u = (await supabase.auth.getUser()).data.user;
+    const { error } = await supabase.from("task_logs").insert([{
+      task_id,
+      action,
+      note,
+      actor_id: u?.id ?? null
+    }]);
+    if (error) {
+      alert("로그 저장 실패: " + error.message);
+    }
+  }
+
+  async function changeStatus(task_id, nextStatus){
+    if(nextStatus === "REJECT"){
+      const reason = prompt("반려 사유를 입력하세요(로그에만 저장됩니다):") || "";
+      const { error } = await supabase.from("tasks")
+        .update({ status: "IN_PROGRESS", approved_by: null })
+        .eq("task_id", task_id);
+
+      if(error){ alert("반려 실패: " + error.message); return; }
+
+      await logAction(task_id, "REJECT", reason);
+      await loadTasks();
+      return;
+    }
+
+    const u = (await supabase.auth.getUser()).data.user;
+    const patch = { status: nextStatus };
+    if(nextStatus === "APPROVED") patch.approved_by = u?.id ?? null;
+
+    const { error } = await supabase.from("tasks")
+      .update(patch)
+      .eq("task_id", task_id);
+
+    if(error){ alert("상태 변경 실패: " + error.message); return; }
+
+    await logAction(task_id, nextStatus, null);
+    await loadTasks();
+  }
+
   async function loadCampuses(){
-    const { data } = await supabase.from("campuses").select("campus_id,campus_name");
-    $("campus").innerHTML = data.map(c=>`<option value="${c.campus_id}">${c.campus_name}</option>`).join("");
+    const { data, error } = await supabase
+      .from("campuses")
+      .select("campus_id,campus_name")
+      .order("campus_name", { ascending: true });
+
+    if (error) { alert("캠퍼스 로드 실패: " + error.message); return; }
+    $("campus").innerHTML = (data || []).map(c =>
+      `<option value="${c.campus_id}">${c.campus_name}</option>`
+    ).join("");
   }
 
   async function loadTasks(){
-    const { data } = await supabase.from("tasks")
+    const { data, error } = await supabase.from("tasks")
       .select("task_id,title,start_at,end_at,status,campuses(campus_name)")
       .order("start_at",{ascending:true});
-$("tbody").innerHTML = (data||[]).map(t=>`
-  <tr>
-    <td>${t.campuses?.campus_name||""}</td>
-    <td>${t.title}</td>
-    <td>${new Date(t.start_at).toLocaleString()} ~ ${new Date(t.end_at).toLocaleString()}</td>
-    <td>${t.status}</td>
-    <td>
-      <button data-act="REQUESTED" data-id="${t.task_id}">요청</button>
-      <button data-act="APPROVED" data-id="${t.task_id}">승인</button>
-      <button data-act="COMPLETED" data-id="${t.task_id}">완료</button>
-      <button data-act="REJECT" data-id="${t.task_id}">반려</button>
-    </td>
-  </tr>
-`).join("");
 
+    if (error) { alert("업무 로드 실패: " + error.message); return; }
+
+    $("tbody").innerHTML = (data||[]).map(t=>`
+      <tr>
+        <td>${t.campuses?.campus_name||""}</td>
+        <td>${t.title}</td>
+        <td>${new Date(t.start_at).toLocaleString()} ~ ${new Date(t.end_at).toLocaleString()}</td>
+        <td>${t.status}</td>
+        <td>
+          <button data-act="REQUESTED" data-id="${t.task_id}">요청</button>
+          <button data-act="APPROVED" data-id="${t.task_id}">승인</button>
+          <button data-act="COMPLETED" data-id="${t.task_id}">완료</button>
+          <button data-act="REJECT" data-id="${t.task_id}">반려</button>
+        </td>
+      </tr>
+    `).join("");
+
+    // ✅ (2) D 단계: tbody 그린 직후에 버튼 이벤트 연결
+    document.querySelectorAll("button[data-act]").forEach(btn=>{
+      btn.onclick = () => changeStatus(btn.dataset.id, btn.dataset.act);
+    });
   }
 
   $("add").onclick = async ()=>{
-    await supabase.from("tasks").insert([{
+    const u = (await supabase.auth.getUser()).data.user;
+    if (!u) { alert("먼저 로그인하세요."); return; }
+
+    const payload = {
       title: $("title").value,
       campus_id: $("campus").value,
       start_at: $("start").value,
       end_at: $("end").value,
       status: "IN_PROGRESS",
-      created_by: (await supabase.auth.getUser()).data.user.id
-    }]);
-    loadTasks();
-  };
-  async function logAction(task_id, action, note=null){
-  const u = (await supabase.auth.getUser()).data.user;
-  await supabase.from("task_logs").insert([{
-    task_id,
-    action,
-    note,
-    actor_id: u?.id ?? null
-  }]);
-}
+      created_by: u.id
+    };
 
-async function changeStatus(task_id, nextStatus){
-  // 반려는 status를 IN_PROGRESS로 되돌리고, 사유는 로그에만
-  if(nextStatus === "REJECT"){
-    const reason = prompt("반려 사유를 입력하세요(로그에만 저장됩니다):") || "";
-    const { error } = await supabase.from("tasks")
-      .update({ status: "IN_PROGRESS", approved_by: null })
-      .eq("task_id", task_id);
-    if(error){ alert(error.message); return; }
-    await logAction(task_id, "REJECT", reason);
+    const { error } = await supabase.from("tasks").insert([payload]);
+    if (error) { alert("추가 실패: " + error.message); return; }
+
+    $("title").value = "";
     await loadTasks();
-    return;
-  }
-
-  // 승인/완료는 approved_by 기록(관리자/매니저가 하도록 UI로만 유도, DB는 RLS로 통제 가능)
-  const u = (await supabase.auth.getUser()).data.user;
-
-  const patch = { status: nextStatus };
-  if(nextStatus === "APPROVED") patch.approved_by = u?.id ?? null;
-
-  const { error } = await supabase.from("tasks")
-    .update(patch)
-    .eq("task_id", task_id);
-
-  if(error){ alert(error.message); return; }
-  await logAction(task_id, nextStatus, null);
-  await loadTasks();
-}
-
-  document.querySelectorAll("button[data-act]").forEach(btn=>{
-  btn.onclick = () => changeStatus(btn.dataset.id, btn.dataset.act);
-});
-
-
-  
+  };
 
   await loadCampuses();
   await loadTasks();
